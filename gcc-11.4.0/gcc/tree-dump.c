@@ -656,6 +656,10 @@ dequeue_and_dump (dump_info_p di)
       dump_child ("expr", TREE_OPERAND (t, 0));
       break;
 
+    case DECL_EXPR:
+      dump_child ("decl", DECL_EXPR_DECL (t));
+      break;
+
     case TARGET_EXPR:
       dump_child ("decl", TREE_OPERAND (t, 0));
       dump_child ("init", TREE_OPERAND (t, 1));
