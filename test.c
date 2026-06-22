@@ -1,5 +1,12 @@
 // test.c — same example as the Worked Example section
+void func(int a, int b) {
+	int c = 0;
+	if (a > b) {
+		c = a - b;
+	} else {
+		c = b - a;
+	}
+}
 void main() {
-	int a =0, b = 1;
-	int c = a + b;
+	func(1,2);
 }
