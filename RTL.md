@@ -14,7 +14,7 @@ Related files:
 Generate them with:
 
 ```bash
-gcc -O1 -fdump-rtl-expand -c test.c    # → test.c.245r.expand
+gcc -O0 -fdump-rtl-expand -c test.c    # → test.c.245r.expand
 gcc -O0 -S -c test.c -o test-O0.s        # assembly for comparison
 ```
 
@@ -147,7 +147,7 @@ Example (lines 36–39):
 
 ---
 
-## `func`: Line-by-Line (lines 1–114)
+## `func`: Line-by-Line (lines 1–114)   [TODO 0622 13:38]
 
 ### Lines 1–5: Function header + stack partition
 
