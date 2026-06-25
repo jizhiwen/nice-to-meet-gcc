@@ -201,7 +201,7 @@ After RTL is generated, empty/redundant blocks are merged and jumps retargeted. 
 
 Below is the full insn chain after CFG merging.
 
-### Line 34: Placeholder note
+### Line 34: Placeholder note [TODO 0625 20:51]
 
 ```text
 (note 1 0 5 NOTE_INSN_DELETED)
