@@ -4,26 +4,73 @@ If your goal is to **deeply understand GCC internals**, dump files are one of th
 
 # Recommended Learning Path
 
+> **Is it correct to say that GCC’s compilation pipeline works as follows?**
+>
+> **Does the front end (lexer, parser, and semantic analysis) fully determine the meaning of the source code by parsing the program, resolving names and types, enforcing language rules, and performing semantic analysis to build a complete language-level semantic model?**
+>
+> **After this stage, when the program is lowered into GENERIC and GIMPLE, is its language semantics already fully established?**
+>
+> **Do the middle end (GENERIC → GIMPLE → CFG → SSA → optimization passes) and the back end (RTL → register allocation → instruction scheduling → assembly generation) avoid reinterpreting source-language semantics, and instead operate only on this already-semantically-resolved representation?**
+>
+> **While these later stages perform sophisticated analyses such as data-flow analysis, control-flow analysis, alias analysis, liveness analysis, dependence analysis, register allocation, and instruction scheduling, is it correct to say that these are program-level and machine-level analyses rather than source-language semantic analysis?**
+>
+> **In other words, is it accurate to say that the front end determines what the program means in the source language, while the middle end and back end preserve that meaning and focus on correctness-preserving transformations and optimizations as well as mapping the program to the target ISA?**
+
+
+
+
 Follow the same order GCC uses:
 
 ```text
-C Source
-  ↓
-Parser
-  ↓
-GENERIC          (tree IR, whole-function graph)
-  ↓
-GIMPLE           (flat three-address statements)
-  ↓
-CFG              (GIMPLE grouped into basic blocks + control-flow edges)
-  ↓
-SSA              (GIMPLE + CFG + single-assignment renaming + PHI)
-  ↓
-Optimized GIMPLE (middle-end optimization passes)
-  ↓
-RTL              (register transfer language; expand → combine → reload → …)
-  ↓
-Assembly
+                           C Source
+                                │
+                                ▼
+                             Front End
+     (Lexer + Parser + Name/Type Resolution + Semantic Analysis)
+     → builds a fully semantically resolved representation
+                                │
+                                ▼
+                           GENERIC IR
+        High-level, language-independent tree representation
+                                │
+                                ▼
+                           GIMPLE IR
+        Simplified 3-address form (low-level semantic IR)
+                                │
+                                ▼
+                    CFG Construction (Control Flow Graph)
+        GIMPLE is partitioned into basic blocks + control edges
+                                │
+                                ▼
+                               SSA Form
+     Value renaming + PHI nodes → explicit data-flow representation
+                                │
+                                ▼
+                     Middle-End Optimizations
+   (still machine-independent, semantics-preserving transformations)
+   - constant propagation
+   - dead code elimination
+   - loop optimizations
+   - alias analysis
+   - vectorization
+                                │
+                                ▼
+                                RTL
+      Machine-dependent intermediate representation (register-level)
+                                │
+                                ▼
+                   Back-End / RTL Optimization
+   - instruction selection
+   - combine / simplify patterns
+   - register allocation (LRA / reload)
+   - instruction scheduling
+   - peephole optimizations
+                                │
+                                ▼
+                           Assembly
+                                │
+                                ▼
+                        Machine Code (.o)
 ```
 
 ---
