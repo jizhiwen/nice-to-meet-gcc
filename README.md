@@ -2,6 +2,10 @@ If your goal is to **deeply understand GCC internals**, dump files are one of th
 
 ---
 
+# Read the doc to learn how to build gcc
+
+https://gcc.gnu.org/install/prerequisites.html
+
 # Recommended Learning Path
 
 > **Is it correct to say that GCC’s compilation pipeline works as follows?**
