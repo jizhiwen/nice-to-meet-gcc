@@ -5,3 +5,4 @@ protobuf structure
 rtps
 
 io-uring
+spdlog
