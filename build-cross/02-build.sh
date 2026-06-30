@@ -182,13 +182,6 @@ step_gcc1() {
     --disable-threads \
     --disable-nls \
     --disable-bootstrap \
-    --disable-libatomic \
-    --disable-libgomp \
-    --disable-libitm \
-    --disable-libquadmath \
-    --disable-libsanitizer \
-    --disable-libssp \
-    --disable-libvtv \
     --disable-multilib \
     --with-system-zlib
 
@@ -216,12 +209,10 @@ step_glibc_headers() {
     --host="$TARGET" \
     --build="$BUILD" \
     --with-headers="$SYSROOT/usr/include" \
-    --disable-multilib \
-    --disable-nls \
     --disable-werror \
-    --enable-kernel=4.19 \
-    libc_cv_forced_unwind=yes \
-    libc_cv_c_cleanup=yes
+    --enable-kernel=4.19
+    # libc_cv_forced_unwind=yes \
+    # libc_cv_c_cleanup=yes
 
   make -j"$JOBS" install-bootstrap-headers=yes install-headers DESTDIR="$SYSROOT"
   make -j"$JOBS" csu/subdir_lib
@@ -261,13 +252,11 @@ step_glibc() {
     --host="$TARGET" \
     --build="$BUILD" \
     --with-headers="$SYSROOT/usr/include" \
-    --disable-multilib \
-    --disable-nls \
     --disable-werror \
     --enable-kernel=4.19 \
-    --with-default-link \
-    libc_cv_forced_unwind=yes \
-    libc_cv_c_cleanup=yes
+    --with-default-link
+    # libc_cv_forced_unwind=yes \
+    # libc_cv_c_cleanup=yes
 
   make -j"$JOBS"
   make DESTDIR="$SYSROOT" install
@@ -289,9 +278,6 @@ step_gcc2() {
     --host="$HOST" \
     --with-sysroot="$SYSROOT" \
     --enable-languages=c,c++ \
-    --enable-shared \
-    --enable-threads \
-    --enable-tls \
     --disable-nls \
     --disable-bootstrap \
     --disable-multilib \

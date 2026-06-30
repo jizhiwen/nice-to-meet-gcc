@@ -231,12 +231,6 @@ mkdir -p ~/toolchain-build/gcc-stage1 && cd ~/toolchain-build/gcc-stage1
   --disable-threads \
   --disable-nls \
   --disable-bootstrap \
-  --disable-libatomic \
-  --disable-libgomp \
-  --disable-libitm \
-  --disable-libquadmath \
-  --disable-libsanitizer \
-  --disable-libssp \
   --disable-multilib \
   --with-system-zlib
 
@@ -264,8 +258,6 @@ CC=${TARGET}-gcc libc_cv_cxx_link_ok=no \
   --host=$TARGET \
   --build=$BUILD \
   --with-headers=$SYSROOT/usr/include \
-  --disable-multilib \
-  --disable-nls \
   --disable-werror \
   --enable-kernel=4.19 \
   libc_cv_forced_unwind=yes \
@@ -301,8 +293,6 @@ CC=${TARGET}-gcc libc_cv_cxx_link_ok=no \
   --host=$TARGET \
   --build=$BUILD \
   --with-headers=$SYSROOT/usr/include \
-  --disable-multilib \
-  --disable-nls \
   --disable-werror \
   --enable-kernel=4.19 \
   --with-default-link \
@@ -325,9 +315,6 @@ mkdir -p ~/toolchain-build/gcc-stage2 && cd ~/toolchain-build/gcc-stage2
   --host=$HOST \
   --with-sysroot=$SYSROOT \
   --enable-languages=c,c++ \
-  --enable-shared \
-  --enable-threads \
-  --enable-tls \
   --disable-nls \
   --disable-bootstrap \
   --disable-multilib \
@@ -416,9 +403,9 @@ If it reports stage 1, run:
 
 Ensure GMP/MPFR/MPC/ISL are symlinked under `gcc-${GCC_VER}/`.
 
-### 2. Glibc build fails / sanitizer errors
+### 2. Glibc build fails early in bootstrap
 
-Use `--disable-libsanitizer` (already in the script), or ensure GCC stage 1 does not enable sanitizers.
+Re-check Step 3/4 ordering and configuration. In this flow, keep `gcc1` as C-only and keep `libc_cv_cxx_link_ok=no` in Glibc configure to avoid host C++ leakage.
 
 ### 3. `cannot find crt1.o` or `cannot find -lc`
 
