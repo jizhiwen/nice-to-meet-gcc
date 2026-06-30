@@ -424,6 +424,17 @@ Ubuntu’s `gcc-aarch64-linux-gnu` is prebuilt; this flow builds from source so 
 
 **Fix:** Pass **`libc_cv_cxx_link_ok=no`** to Glibc configure (steps 4 and 6 in `02-build.sh`). That forces `CXX` to stay empty so Glibc uses the pure-C `links-dso-program-c`. **`CXX=` alone is not enough** — configure still discovers host `g++`.
 
+**How this variable works:** `libc_cv_cxx_link_ok` is a Glibc configure cache variable.  
+When set to `no`, Glibc treats C++ linking as unavailable in this bootstrap stage and clears `CXX`.  
+With empty `CXX`, Glibc selects the C helper (`links-dso-program-c`) instead of the C++ helper (`links-dso-program`), avoiding host `g++` leakage into the target link.
+
+Use it in both Glibc configure steps:
+
+```bash
+CC=${TARGET}-gcc libc_cv_cxx_link_ok=no \
+  .../glibc-${GLIBC_VER}/configure ...
+```
+
 After changing configure options, remove the old build dir and re-run:
 
 ```bash
