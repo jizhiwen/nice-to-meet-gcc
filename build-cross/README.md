@@ -121,7 +121,7 @@ These commands match the scripts; use them to understand the process or debug by
 ### 4.1 Set variables
 
 ```bash
-export PREFIX=$HOME/cross-aarch64
+export PREFIX=$PWD/cross-aarch64
 export TARGET=aarch64-none-linux-gnu
 export BUILD=$(gcc -dumpmachine)          # e.g. x86_64-linux-gnu
 export HOST=$BUILD
@@ -240,8 +240,8 @@ mkdir -p ~/toolchain-build/gcc-stage1 && cd ~/toolchain-build/gcc-stage1
   --disable-multilib \
   --with-system-zlib
 
-make -j$JOBS all-gcc all-target-libgcc
-make install-gcc install-target-libgcc
+make -j$JOBS all-gcc
+make install-gcc
 ```
 
 Verify:
@@ -281,7 +281,7 @@ ${TARGET}-gcc -nostdlib -nostartfiles -shared -x c /dev/null \
 touch $SYSROOT/usr/include/gnu/stubs.h
 ```
 
-### 4.7 Step 5 — Complete libgcc
+### 4.7 Step 5 — Build libgcc
 
 ```bash
 cd ~/toolchain-build/gcc-stage1

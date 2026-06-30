@@ -5,7 +5,8 @@
 export TOP="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Where to install toolchain binaries (gcc, ld, etc.)
-export PREFIX="${PREFIX:-$HOME/cross-aarch64}"
+# Default: inside this build-cross directory
+export PREFIX="${PREFIX:-$TOP/cross-aarch64}"
 
 # Target: arm64 Linux (GNU spelling is aarch64)
 export TARGET="${TARGET:-aarch64-none-linux-gnu}"

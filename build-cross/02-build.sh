@@ -162,6 +162,8 @@ step_binutils() {
 # Emits aarch64 code but has no standard library headers yet.
 # --without-headers: no libc headers
 # --enable-languages=c: C only; C++ comes after Glibc is installed
+# Keep this step minimal: build/install compiler only.
+# Target libgcc is built in Step 5 after Glibc headers are in place.
 # ---------------------------------------------------------------------------
 step_gcc1() {
   local dir="$BUILDDIR/gcc-stage1"
@@ -190,8 +192,8 @@ step_gcc1() {
     --disable-multilib \
     --with-system-zlib
 
-  make -j"$JOBS" all-gcc all-target-libgcc
-  make install-gcc install-target-libgcc
+  make -j"$JOBS" all-gcc
+  make install-gcc
 }
 
 # ---------------------------------------------------------------------------
@@ -234,8 +236,8 @@ step_glibc_headers() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5: finish libgcc
-# Rebuild libgcc now that Glibc headers exist (TLS, threads, etc.)
+# Step 5: build libgcc
+# Build target libgcc after Glibc headers exist (TLS, threads, etc.)
 # ---------------------------------------------------------------------------
 step_libgcc() {
   cd "$BUILDDIR/gcc-stage1"
