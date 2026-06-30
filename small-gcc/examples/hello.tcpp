@@ -1,0 +1,4 @@
+int main() {
+  tiny_write(1, "hello from tiny toolchain\n", 26);
+  return 0;
+}

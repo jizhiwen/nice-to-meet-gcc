@@ -1,0 +1,3 @@
+int main() {
+  return tiny_vec_demo_sum();
+}
