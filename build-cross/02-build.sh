@@ -1,46 +1,136 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# =============================================================================
+# aarch64-none-linux-gnu cross-toolchain — step-by-step build script
+#
+# Why so many steps?
+#   GCC and Glibc depend on each other: Glibc needs GCC, full GCC needs Glibc.
+#   Cross builds cannot bootstrap like native builds; we break the cycle by hand.
+#
+# Order (matches README Section 4):
+#   1. Linux headers   →  linux/*.h in sysroot
+#   2. Binutils          →  aarch64 as, ld
+#   3. GCC stage 1       →  cross C only (no libc yet)
+#   4. Glibc headers     →  crt*.o, headers, stub libc.so
+#   5. libgcc            →  threads / runtime support
+#   6. Full Glibc        →  real libc.so
+#   7. GCC stage 2       →  full gcc/g++ with shared libs
+# =============================================================================
+set -Eeuo pipefail
 
 source "$(dirname "$0")/config.sh"
 
-log() {
-  echo "[$(date '+%H:%M:%S')] $*"
+log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+export STAMPDIR="$BUILDDIR/.stamps"
+export LOCKFILE="$BUILDDIR/.build.lock"
+LAST_LOG=""
+ON_ERROR_SEEN=0
+
+on_error() {
+  local exit_code=$?
+  if [[ "$ON_ERROR_SEEN" == "1" ]]; then
+    exit "$exit_code"
+  fi
+  ON_ERROR_SEEN=1
+  trap - ERR
+  echo
+  log "Build failed (exit code: $exit_code)."
+  if [[ -n "$LAST_LOG" ]]; then
+    log "Check log for details: $LAST_LOG"
+  fi
+  log "Tip: fix the issue, then re-run the failed step only (example: ./02-build.sh glibc)."
+  exit "$exit_code"
+}
+trap on_error ERR
+
+acquire_lock() {
+  exec 9>"$LOCKFILE"
+  if ! flock -n 9; then
+    echo "Another build-cross job is already running."
+    echo "Wait for it to finish, or stop it before retrying."
+    exit 1
+  fi
+}
+
+invalidate_later_stamps() {
+  local current="$1"
+  case "$current" in
+    1) rm -f "$STAMPDIR"/2-* "$STAMPDIR"/3-* "$STAMPDIR"/4-* "$STAMPDIR"/5-* "$STAMPDIR"/6-* "$STAMPDIR"/7-* ;;
+    2) rm -f "$STAMPDIR"/3-* "$STAMPDIR"/4-* "$STAMPDIR"/5-* "$STAMPDIR"/6-* "$STAMPDIR"/7-* ;;
+    3) rm -f "$STAMPDIR"/4-* "$STAMPDIR"/5-* "$STAMPDIR"/6-* "$STAMPDIR"/7-* ;;
+    4) rm -f "$STAMPDIR"/5-* "$STAMPDIR"/6-* "$STAMPDIR"/7-* ;;
+    5) rm -f "$STAMPDIR"/6-* "$STAMPDIR"/7-* ;;
+    6) rm -f "$STAMPDIR"/7-* ;;
+    7) ;;
+  esac
 }
 
 run_step() {
-  local name="$1"
-  shift
-  log ">>> $name"
-  "$@" 2>&1 | tee "$LOGDIR/$(echo "$name" | tr ' /' '__').log"
-  log "<<< $name 完成"
+  local display_name="$1"
+  local stamp_name="$2"
+  local step_no="$3"
+  shift 3
+
+  local logfile="$LOGDIR/${display_name}.log"
+  local stampfile="$STAMPDIR/${stamp_name}"
+  LAST_LOG="$logfile"
+
+  if [[ -f "$stampfile" && "${FORCE:-0}" != "1" ]]; then
+    log ">>> $display_name (skipped; already completed)"
+    return 0
+  fi
+
+  log ">>> $display_name"
+  "$@" 2>&1 | tee "$logfile"
+  touch "$stampfile"
+  invalidate_later_stamps "$step_no"
+  log "<<< $display_name done"
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 0: 检查构建依赖
+# Step 0: check host build dependencies
 # ---------------------------------------------------------------------------
 check_deps() {
-  log "检查构建依赖..."
+  log "Checking build dependencies..."
   local missing=()
-  for cmd in gcc g++ make patch bison flex gawk python3 curl tar xz; do
+  for cmd in gcc g++ make patch bison flex gawk python3 curl tar xz file flock; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
   if ((${#missing[@]})); then
-    echo "缺少依赖: ${missing[*]}"
-    echo "Ubuntu/Debian 安装命令:"
-    echo "  sudo apt install build-essential bison flex gawk texinfo \\"
-    echo "    libgmp-dev libmpfr-dev libmpc-dev zlib1g-dev \\"
-    echo "    curl xz-utils patch python3"
+    echo "Missing: ${missing[*]}"
+    echo "Ubuntu/Debian: sudo apt install build-essential bison flex gawk texinfo \\"
+    echo "  libgmp-dev libmpfr-dev libmpc-dev zlib1g-dev curl xz-utils patch python3"
+    exit 1
+  fi
+}
+
+check_sources() {
+  local missing=()
+  local needed_dirs=(
+    "$SRCDIR/linux-${LINUX_VER}"
+    "$SRCDIR/binutils-${BINUTILS_VER}"
+    "$SRCDIR/gcc-${GCC_VER}"
+    "$SRCDIR/glibc-${GLIBC_VER}"
+  )
+
+  for dir in "${needed_dirs[@]}"; do
+    [[ -d "$dir" ]] || missing+=("$dir")
+  done
+
+  if ((${#missing[@]})); then
+    echo "Missing extracted source directories:"
+    printf '  - %s\n' "${missing[@]}"
+    echo "Run: ./01-download.sh"
     exit 1
   fi
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 1: Linux 内核头文件 → sysroot
+# Step 1: Linux kernel headers
+# Glibc needs kernel UAPI headers such as <linux/*.h>
 # ---------------------------------------------------------------------------
 step_linux_headers() {
-  local dir="$BUILDDIR/linux-headers"
-  mkdir -p "$dir"
-  cd "$dir"
+  mkdir -p "$SYSROOT/usr"
   make -C "$SRCDIR/linux-${LINUX_VER}" \
     ARCH=arm64 \
     INSTALL_HDR_PATH="$SYSROOT/usr" \
@@ -48,13 +138,13 @@ step_linux_headers() {
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 2: Binutils
+# Step 2: Binutils (assembler, linker, ...)
+# Produces ${TARGET}-as, ${TARGET}-ld for linking aarch64 objects
 # ---------------------------------------------------------------------------
 step_binutils() {
   local dir="$BUILDDIR/binutils"
-  rm -rf "$dir"
-  mkdir -p "$dir"
-  cd "$dir"
+  rm -rf "$dir" && mkdir -p "$dir" && cd "$dir"
+
   "$SRCDIR/binutils-${BINUTILS_VER}/configure" \
     --prefix="$PREFIX" \
     --target="$TARGET" \
@@ -62,18 +152,21 @@ step_binutils() {
     --disable-multilib \
     --disable-nls \
     --disable-werror
+
   make -j"$JOBS"
   make install
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 3: GCC 第一阶段 — 最小 C 交叉编译器（无头文件、无共享库）
+# Step 3: GCC stage 1 — minimal cross C compiler
+# Emits aarch64 code but has no standard library headers yet.
+# --without-headers: no libc headers
+# --enable-languages=c: C only; C++ comes after Glibc is installed
 # ---------------------------------------------------------------------------
 step_gcc1() {
   local dir="$BUILDDIR/gcc-stage1"
-  rm -rf "$dir"
-  mkdir -p "$dir"
-  cd "$dir"
+  rm -rf "$dir" && mkdir -p "$dir" && cd "$dir"
+
   "$SRCDIR/gcc-${GCC_VER}/configure" \
     --prefix="$PREFIX" \
     --target="$TARGET" \
@@ -96,18 +189,26 @@ step_gcc1() {
     --disable-libvtv \
     --disable-multilib \
     --with-system-zlib
+
   make -j"$JOBS" all-gcc all-target-libgcc
   make install-gcc install-target-libgcc
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 4: Glibc 头文件 + 启动文件 + 占位 libc.so
+# Step 4: Glibc headers + startup files + stub libc.so
+# Lets GCC stage 2 see headers and crt1.o for link tests.
+#
+# CXX (important):
+#   ${TARGET}-g++ does not exist yet. CXX= alone is NOT enough: configure still
+#   finds host g++ and the link test passes. Use libc_cv_cxx_link_ok=no so CXX
+#   stays empty and Glibc builds links-dso-program-c (pure C) instead.
 # ---------------------------------------------------------------------------
 step_glibc_headers() {
   local dir="$BUILDDIR/glibc-headers"
-  rm -rf "$dir"
-  mkdir -p "$dir"
-  cd "$dir"
+  rm -rf "$dir" && mkdir -p "$dir" && cd "$dir"
+
+  CC="${TARGET}-gcc" \
+  libc_cv_cxx_link_ok=no \
   "$SRCDIR/glibc-${GLIBC_VER}/configure" \
     --prefix=/usr \
     --host="$TARGET" \
@@ -119,35 +220,40 @@ step_glibc_headers() {
     --enable-kernel=4.19 \
     libc_cv_forced_unwind=yes \
     libc_cv_c_cleanup=yes
+
   make -j"$JOBS" install-bootstrap-headers=yes install-headers DESTDIR="$SYSROOT"
   make -j"$JOBS" csu/subdir_lib
-  install -D csu/crt1.o  "$SYSROOT/usr/lib/crt1.o"
-  install -D csu/crti.o  "$SYSROOT/usr/lib/crti.o"
-  install -D csu/crtn.o  "$SYSROOT/usr/lib/crtn.o"
-  # 占位文件，供 GCC 第二阶段链接使用
+  install -D csu/crt1.o "$SYSROOT/usr/lib/crt1.o"
+  install -D csu/crti.o "$SYSROOT/usr/lib/crti.o"
+  install -D csu/crtn.o "$SYSROOT/usr/lib/crtn.o"
+
+  # Stub libc.so so GCC stage 2 configure can pass link tests
   "${TARGET}-gcc" -nostdlib -nostartfiles -shared -x c /dev/null \
     -o "$SYSROOT/usr/lib/libc.so"
   touch "$SYSROOT/usr/include/gnu/stubs.h"
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 5: 完整 libgcc（含线程支持等）
+# Step 5: finish libgcc
+# Rebuild libgcc now that Glibc headers exist (TLS, threads, etc.)
 # ---------------------------------------------------------------------------
 step_libgcc() {
-  local dir="$BUILDDIR/gcc-stage1"
-  cd "$dir"
+  cd "$BUILDDIR/gcc-stage1"
   make -j"$JOBS" all-target-libgcc
   make install-target-libgcc
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 6: 完整 Glibc
+# Step 6: full Glibc
+# Build and install real libc.so, libm.so, ... into sysroot.
+# Same libc_cv_cxx_link_ok=no as step 4 (CXX= alone is not enough).
 # ---------------------------------------------------------------------------
 step_glibc() {
   local dir="$BUILDDIR/glibc"
-  rm -rf "$dir"
-  mkdir -p "$dir"
-  cd "$dir"
+  rm -rf "$dir" && mkdir -p "$dir" && cd "$dir"
+
+  CC="${TARGET}-gcc" \
+  libc_cv_cxx_link_ok=no \
   "$SRCDIR/glibc-${GLIBC_VER}/configure" \
     --prefix=/usr \
     --host="$TARGET" \
@@ -160,18 +266,20 @@ step_glibc() {
     --with-default-link \
     libc_cv_forced_unwind=yes \
     libc_cv_c_cleanup=yes
+
   make -j"$JOBS"
   make DESTDIR="$SYSROOT" install
 }
 
 # ---------------------------------------------------------------------------
-# 步骤 7: GCC 第二阶段 — 完整工具链（C/C++、共享库）
+# Step 7: GCC stage 2 — full toolchain
+# Glibc is ready; build gcc/g++ with C++, shared libs, and threads
 # ---------------------------------------------------------------------------
 step_gcc2() {
   local dir="$BUILDDIR/gcc-stage2"
-  rm -rf "$dir"
-  mkdir -p "$dir"
-  cd "$dir"
+  local gcc_jobs="${JOBS_GCC2:-$JOBS}"
+  rm -rf "$dir" && mkdir -p "$dir" && cd "$dir"
+
   "$SRCDIR/gcc-${GCC_VER}/configure" \
     --prefix="$PREFIX" \
     --target="$TARGET" \
@@ -186,71 +294,105 @@ step_gcc2() {
     --disable-bootstrap \
     --disable-multilib \
     --with-system-zlib
-  make -j"$JOBS"
+
+  make -j"$gcc_jobs"
   make install
 }
 
 # ---------------------------------------------------------------------------
-# 主流程
+# Main
 # ---------------------------------------------------------------------------
 usage() {
   cat <<EOF
-用法: $0 [步骤]
+Usage: $0 [step]
 
-步骤:
-  all            执行全部步骤（默认）
-  deps           检查依赖
-  headers        Linux 内核头文件
-  binutils       交叉 Binutils
-  gcc1           GCC 第一阶段
-  glibc-h        Glibc 头文件与启动文件
-  libgcc         完整 libgcc
-  glibc          完整 Glibc
-  gcc2           GCC 第二阶段（最终工具链）
+Steps (in order):
+  all       Run all steps (default)
+  deps      Check dependencies
+  headers   1. Linux headers
+  binutils  2. Binutils
+  gcc1      3. GCC stage 1
+  glibc-h   4. Glibc headers and startup files
+  libgcc    5. Finish libgcc
+  glibc     6. Full Glibc
+  gcc2      7. GCC stage 2
+  list      Show step completion status
+  clean     Remove build dirs and completion stamps
 
-环境变量:
-  PREFIX         安装前缀（默认 \$HOME/cross-aarch64）
-  JOBS           并行线程数（默认 nproc）
-  TARGET         目标三元组（默认 aarch64-none-linux-gnu）
+Environment: PREFIX  TARGET  JOBS  FORCE=1  (see config.sh)
+             JOBS_GCC2 can override JOBS for the last GCC step
 
-示例:
+Examples:
   source config.sh && ./02-build.sh all
-  ./02-build.sh gcc2          # 从某步恢复
+  ./02-build.sh glibc          # Re-run one step after a failure
+  FORCE=1 ./02-build.sh gcc2   # Rebuild a completed step
 EOF
+}
+
+print_step_status() {
+  mkdir -p "$STAMPDIR"
+  local steps=(
+    "1-linux-headers"
+    "2-binutils"
+    "3-gcc-stage1"
+    "4-glibc-headers"
+    "5-libgcc"
+    "6-glibc"
+    "7-gcc-stage2"
+  )
+  echo "Step status:"
+  for step in "${steps[@]}"; do
+    if [[ -f "$STAMPDIR/$step.done" ]]; then
+      echo "  [done] $step"
+    else
+      echo "  [todo] $step"
+    fi
+  done
+}
+
+clean_build() {
+  log "Cleaning build directories and stamps..."
+  rm -rf "$BUILDDIR/binutils" \
+         "$BUILDDIR/gcc-stage1" \
+         "$BUILDDIR/glibc-headers" \
+         "$BUILDDIR/glibc" \
+         "$BUILDDIR/gcc-stage2" \
+         "$STAMPDIR"
+  log "Clean finished."
 }
 
 main() {
   local step="${1:-all}"
-  mkdir -p "$BUILDDIR" "$LOGDIR" "$SYSROOT/usr/include" "$SYSROOT/usr/lib"
+  mkdir -p "$BUILDDIR" "$LOGDIR" "$STAMPDIR" "$SYSROOT/usr/include" "$SYSROOT/usr/lib"
+  acquire_lock
 
   case "$step" in
-    deps)       check_deps ;;
-    headers)    run_step "linux-headers" step_linux_headers ;;
-    binutils)   run_step "binutils" step_binutils ;;
-    gcc1)       run_step "gcc-stage1" step_gcc1 ;;
-    glibc-h)    run_step "glibc-headers" step_glibc_headers ;;
-    libgcc)     run_step "libgcc" step_libgcc ;;
-    glibc)      run_step "glibc" step_glibc ;;
-    gcc2)       run_step "gcc-stage2" step_gcc2 ;;
+    deps)      check_deps ;;
+    list)      print_step_status ;;
+    clean)     clean_build ;;
+    headers)   check_sources; run_step "1-linux-headers"  "1-linux-headers.done" 1 step_linux_headers ;;
+    binutils)  check_sources; run_step "2-binutils"       "2-binutils.done" 2 step_binutils ;;
+    gcc1)      check_sources; run_step "3-gcc-stage1"     "3-gcc-stage1.done" 3 step_gcc1 ;;
+    glibc-h)   check_sources; run_step "4-glibc-headers"  "4-glibc-headers.done" 4 step_glibc_headers ;;
+    libgcc)    check_sources; run_step "5-libgcc"         "5-libgcc.done" 5 step_libgcc ;;
+    glibc)     check_sources; run_step "6-glibc"          "6-glibc.done" 6 step_glibc ;;
+    gcc2)      check_sources; run_step "7-gcc-stage2"     "7-gcc-stage2.done" 7 step_gcc2 ;;
     all)
       check_deps
-      run_step "linux-headers" step_linux_headers
-      run_step "binutils" step_binutils
-      run_step "gcc-stage1" step_gcc1
-      run_step "glibc-headers" step_glibc_headers
-      run_step "libgcc" step_libgcc
-      run_step "glibc" step_glibc
-      run_step "gcc-stage2" step_gcc2
-      log "工具链安装完成: $PREFIX"
-      log "请将以下行加入 ~/.bashrc:"
-      echo "  export PATH=\"$PREFIX/bin:\$PATH\""
+      check_sources
+      run_step "1-linux-headers"  "1-linux-headers.done" 1 step_linux_headers
+      run_step "2-binutils"       "2-binutils.done" 2 step_binutils
+      run_step "3-gcc-stage1"     "3-gcc-stage1.done" 3 step_gcc1
+      run_step "4-glibc-headers"  "4-glibc-headers.done" 4 step_glibc_headers
+      run_step "5-libgcc"         "5-libgcc.done" 5 step_libgcc
+      run_step "6-glibc"          "6-glibc.done" 6 step_glibc
+      run_step "7-gcc-stage2"     "7-gcc-stage2.done" 7 step_gcc2
+      log "Done! Toolchain installed at: $PREFIX"
+      log "Add to PATH: export PATH=\"$PREFIX/bin:\$PATH\""
       ;;
     -h|--help|help) usage ;;
     *)
-      echo "未知步骤: $step"
-      usage
-      exit 1
-      ;;
+      echo "Unknown step: $step"; usage; exit 1 ;;
   esac
 }
 

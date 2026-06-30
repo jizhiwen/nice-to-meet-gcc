@@ -6,29 +6,39 @@ source "$(dirname "$0")/config.sh"
 CC="${TARGET}-gcc"
 CXX="${TARGET}-g++"
 
-echo "=== 验证交叉工具链 ==="
+echo "=== Verifying cross-toolchain ==="
 echo "PREFIX:  $PREFIX"
 echo "TARGET:  $TARGET"
 echo "SYSROOT: $SYSROOT"
 echo
 
-for tool in gcc g++ ld as ar ranlib strip objcopy; do
+for tool in gcc ld as ar ranlib strip objcopy; do
   path="$PREFIX/bin/${TARGET}-${tool}"
   if [[ -x "$path" ]]; then
     echo "[OK] $path"
   else
-    echo "[FAIL] 缺少 $path"
+    echo "[FAIL] Missing $path"
     exit 1
   fi
 done
 
+if [[ -x "$PREFIX/bin/${TARGET}-g++" ]]; then
+  echo "[OK] $PREFIX/bin/${TARGET}-g++"
+  TOOLCHAIN_STAGE="full"
+else
+  echo "[INFO] ${TARGET}-g++ is missing."
+  echo "       Current stage is likely GCC stage 1 only."
+  echo "       Build the final compiler with: ./02-build.sh gcc2"
+  TOOLCHAIN_STAGE="stage1"
+fi
+
 echo
-echo "--- 版本信息 ---"
-"$CC" --version | head -1
+echo "--- Version ---"
+"$CC" --version | sed -n '1p'
 "$CC" -dumpmachine
 
 echo
-echo "--- 编译测试程序 ---"
+echo "--- Compile test programs ---"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -40,27 +50,36 @@ int main(void) {
 }
 EOF
 
-cat > "$TMPDIR/test.cpp" <<'EOF'
+# Always validate C linking against the target sysroot.
+"$CC" --sysroot="$SYSROOT" -o "$TMPDIR/hello" "$TMPDIR/hello.c"
+file "$TMPDIR/hello"
+
+if [[ "$TOOLCHAIN_STAGE" == "full" ]]; then
+  cat > "$TMPDIR/test.cpp" <<'EOF'
 #include <iostream>
 int main() {
     std::cout << "C++ OK" << std::endl;
     return 0;
 }
 EOF
-
-# 静态链接测试（不依赖目标机动态加载器）
-"$CC" -static -o "$TMPDIR/hello" "$TMPDIR/hello.c"
-file "$TMPDIR/hello"
-"$CXX" -static -o "$TMPDIR/test" "$TMPDIR/test.cpp"
-file "$TMPDIR/test"
+  "$CXX" --sysroot="$SYSROOT" -o "$TMPDIR/test" "$TMPDIR/test.cpp"
+  file "$TMPDIR/test"
+fi
 
 echo
-echo "--- 检查 sysroot ---"
-ls "$SYSROOT/usr/lib/libc.so"* 2>/dev/null || echo "警告: 未找到 libc"
-ls "$SYSROOT/usr/include/stdio.h" 2>/dev/null || echo "警告: 未找到 stdio.h"
+echo "--- Check sysroot ---"
+ls "$SYSROOT/usr/lib/libc.so"* 2>/dev/null || echo "Warning: libc not found"
+ls "$SYSROOT/usr/include/stdio.h" 2>/dev/null || echo "Warning: stdio.h not found"
 
 echo
-echo "=== 验证通过 ==="
-echo "使用示例:"
-echo "  ${TARGET}-gcc -o hello hello.c"
-echo "  ${TARGET}-gcc -static -o hello_static hello.c"
+if [[ "$TOOLCHAIN_STAGE" == "full" ]]; then
+  echo "=== Verification passed (full C/C++ toolchain) ==="
+  echo "Examples:"
+  echo "  ${TARGET}-gcc --sysroot=$SYSROOT -o hello hello.c"
+  echo "  ${TARGET}-g++ --sysroot=$SYSROOT -o app app.cpp"
+else
+  echo "=== Verification passed (stage 1 C-only toolchain) ==="
+  echo "Next:"
+  echo "  ./02-build.sh gcc2"
+  echo "  ./03-verify.sh"
+fi

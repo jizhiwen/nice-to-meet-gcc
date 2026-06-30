@@ -1,43 +1,43 @@
-# aarch64-none-linux-gnu 交叉编译工具链 — 完整构建指南
+# aarch64-none-linux-gnu Cross-Toolchain — Build Guide
 
-从零构建 **aarch64-none-linux-gnu**（即 arm64 Linux GNU 工具链）的完整流程。
+A step-by-step guide to building an **aarch64-none-linux-gnu** (arm64 Linux GNU) toolchain from source.
 
-> **命名说明**：GNU 工具链中 arm64 的标准写法是 `aarch64`，不是 `arm64`。  
-> 三元组格式为 `架构-厂商-操作系统-ABI`，例如 `aarch64-none-linux-gnu`。
-
----
-
-## 一、为什么需要多阶段构建？
-
-GCC 与 Glibc 存在循环依赖：
-
-- 编译 Glibc 需要 **已能生成目标代码的 GCC**
-- 完整功能的 GCC 又需要 **已安装的目标 C 库（Glibc）和头文件**
-
-交叉编译无法做 native 的三阶段 bootstrap，因此采用 **分阶段手动引导**：
-
-```
-Linux 头文件 → Binutils → GCC(最小) → Glibc 头/启动文件 → libgcc → Glibc → GCC(完整)
-```
+> **Naming note:** In GNU toolchains, arm64 is written as `aarch64`, not `arm64`.  
+> A triplet has the form `arch-vendor-os-abi`, e.g. `aarch64-none-linux-gnu`.
 
 ---
 
-## 二、环境要求
+## 1. Why a multi-stage build?
 
-### 硬件
+GCC and Glibc depend on each other:
 
-| 项目 | 建议 |
-|------|------|
-| 磁盘 | ≥ 20 GB 可用空间 |
-| 内存 | ≥ 8 GB（GCC 编译较耗内存） |
-| CPU | 多核（`-j$(nproc)` 并行编译） |
+- Building Glibc requires a **GCC that can emit target code**
+- A full GCC needs **Glibc (and its headers) already installed**
 
-### 宿主系统
+Cross-compilation cannot use the native three-stage bootstrap, so we **bootstrap manually in stages**:
 
-- x86_64 Linux（本指南以 Ubuntu 22.04 为例）
-- **原生 GCC ≥ 4.8**（建议 GCC 9+）
+```
+Linux headers → Binutils → GCC (minimal) → Glibc headers/startup → libgcc → Glibc → GCC (full)
+```
 
-### 安装构建依赖
+---
+
+## 2. Requirements
+
+### Hardware
+
+| Item | Recommendation |
+|------|----------------|
+| Disk | ≥ 20 GB free |
+| RAM | ≥ 8 GB (GCC is memory-hungry) |
+| CPU | Multi-core (`-j$(nproc)` parallel build) |
+
+### Host system
+
+- x86_64 Linux (this guide uses Ubuntu 22.04 as an example)
+- **Native GCC ≥ 4.8** (GCC 9+ recommended)
+
+### Build dependencies
 
 ```bash
 sudo apt update
@@ -49,28 +49,40 @@ sudo apt install -y \
 
 ---
 
-## 三、快速开始（自动化脚本）
+## 3. Quick start (automated scripts)
 
-本仓库提供一键脚本，推荐首次使用：
+`02-build.sh` runs the manual commands from Section 4 below, one step at a time, and writes logs. Each step is explained in the script header comments.
+
+| Script step | What it does |
+|-------------|--------------|
+| `headers` | Install Linux kernel headers into sysroot |
+| `binutils` | Build aarch64 `as`, `ld`, etc. |
+| `gcc1` | Minimal cross C compiler (no libc yet) |
+| `glibc-h` | Glibc headers, crt startup files, stub `libc.so` |
+| `libgcc` | Finish libgcc (threads, etc.) |
+| `glibc` | Full Glibc |
+| `gcc2` | Full `gcc` / `g++` |
+| `list` | Show per-step completion status |
+| `clean` | Remove build directories and step stamps |
 
 ```bash
-cd /home/zw/build-cross
+cd build-cross
 
-# 1. 下载并解压全部源码
+# 1. Download and extract sources
 chmod +x *.sh scripts/config.guess
 ./01-download.sh
 
-# 2. 加载环境变量
+# 2. Load environment variables
 source config.sh
 
-# 3. 完整构建（约 1~3 小时，视机器而定）
+# 3. Full build (~1–3 hours)
 ./02-build.sh all
 
-# 4. 验证
+# 4. Verify
 ./03-verify.sh
 ```
 
-### 自定义安装路径
+### Custom install prefix
 
 ```bash
 export PREFIX=/opt/cross-aarch64
@@ -79,49 +91,60 @@ source config.sh
 ./02-build.sh all
 ```
 
-### 从某步恢复（构建中断时）
+### Resume after interruption
 
 ```bash
 source config.sh
-./02-build.sh glibc    # 只重跑 Glibc
-./02-build.sh gcc2     # 只重跑最终 GCC
+./02-build.sh glibc    # Re-run step 6 only
+./02-build.sh gcc2     # Re-run step 7 only
 ```
 
-日志保存在 `logs/` 目录。
+Logs are in `logs/`; names match step numbers (e.g. `6-glibc.log`).
+
+### Inspect or force step rebuilds
+
+`02-build.sh` stores completion stamps in `build/.stamps/`. If a step is already complete, it is skipped by default.
+
+```bash
+./02-build.sh list
+FORCE=1 ./02-build.sh gcc2   # Rebuild even if already marked done
+JOBS_GCC2=4 ./02-build.sh gcc2
+./02-build.sh clean          # Remove build dirs and stamps
+```
 
 ---
 
-## 四、手动逐步构建（完整命令）
+## 4. Manual step-by-step build
 
-以下命令与脚本逻辑一致，便于理解原理或手动调试。
+These commands match the scripts; use them to understand the process or debug by hand.
 
-### 4.1 设置变量
+### 4.1 Set variables
 
 ```bash
 export PREFIX=$HOME/cross-aarch64
 export TARGET=aarch64-none-linux-gnu
-export BUILD=$(gcc -dumpmachine)          # 例如 x86_64-linux-gnu
+export BUILD=$(gcc -dumpmachine)          # e.g. x86_64-linux-gnu
 export HOST=$BUILD
 export SYSROOT=$PREFIX/$TARGET/sysroot
 export PATH=$PREFIX/bin:$PATH
 export JOBS=$(nproc)
 
-# 版本号（与 config.sh 保持一致）
+# Versions (keep in sync with config.sh)
 export BINUTILS_VER=2.43.1
 export GCC_VER=14.2.0
 export GLIBC_VER=2.40
 export LINUX_VER=6.12.5
 ```
 
-### 4.2 下载源码
+### 4.2 Download sources
 
-| 组件 | 用途 |
-|------|------|
-| Linux 内核 | 提供 `usr/include` 下的 Linux API 头文件 |
-| Binutils | `as`、`ld`、`ar`、`ranlib` 等 |
-| GCC | 交叉 C/C++ 编译器 |
-| Glibc | 目标 C 库 |
-| GMP / MPFR / MPC / ISL | GCC 依赖（链接到 gcc 源码目录） |
+| Component | Purpose |
+|-----------|---------|
+| Linux kernel | Linux API headers under `usr/include` |
+| Binutils | `as`, `ld`, `ar`, `ranlib`, etc. |
+| GCC | Cross C/C++ compiler |
+| Glibc | Target C library |
+| GMP / MPFR / MPC / ISL | GCC deps (symlinked into GCC source tree) |
 
 ```bash
 mkdir -p ~/toolchain-src && cd ~/toolchain-src
@@ -144,7 +167,7 @@ tar xf mpfr-*.tar.xz
 tar xf mpc-*.tar.gz
 tar xf isl-*.tar.xz
 
-# 将依赖库链接进 GCC 源码树
+# Symlink deps into the GCC source tree
 cd gcc-${GCC_VER}
 ln -sf ../gmp-6.3.0 gmp
 ln -sf ../mpfr-4.2.1 mpfr
@@ -153,7 +176,7 @@ ln -sf ../isl-0.27 isl
 cd ..
 ```
 
-### 4.3 步骤 1 — Linux 内核头文件
+### 4.3 Step 1 — Linux kernel headers
 
 ```bash
 mkdir -p $SYSROOT/usr
@@ -164,9 +187,9 @@ make -C linux-${LINUX_VER} \
   headers_install
 ```
 
-安装结果：`$SYSROOT/usr/include/linux/`、`asm/` 等。
+Result: `$SYSROOT/usr/include/linux/`, `asm/`, etc.
 
-### 4.4 步骤 2 — Binutils
+### 4.4 Step 2 — Binutils
 
 ```bash
 mkdir -p ~/toolchain-build/binutils && cd ~/toolchain-build/binutils
@@ -183,14 +206,14 @@ make -j$JOBS
 make install
 ```
 
-验证：
+Verify:
 
 ```bash
 ${TARGET}-as --version
 ${TARGET}-ld --version
 ```
 
-### 4.5 步骤 3 — GCC 第一阶段（最小 C 编译器）
+### 4.5 Step 3 — GCC stage 1 (minimal C compiler)
 
 ```bash
 mkdir -p ~/toolchain-build/gcc-stage1 && cd ~/toolchain-build/gcc-stage1
@@ -221,18 +244,21 @@ make -j$JOBS all-gcc all-target-libgcc
 make install-gcc install-target-libgcc
 ```
 
-验证：
+Verify:
 
 ```bash
 ${TARGET}-gcc --version
-${TARGET}-gcc -dumpmachine   # 应输出 aarch64-none-linux-gnu
+${TARGET}-gcc -dumpmachine   # should print aarch64-none-linux-gnu
 ```
 
-### 4.6 步骤 4 — Glibc 头文件与启动文件
+### 4.6 Step 4 — Glibc headers and startup files
 
 ```bash
 mkdir -p ~/toolchain-build/glibc-headers && cd ~/toolchain-build/glibc-headers
 
+# No cross C++ yet — libc_cv_cxx_link_ok=no (CXX= alone is not enough; configure
+# would still find host g++ and build links-dso-program with x86 code)
+CC=${TARGET}-gcc libc_cv_cxx_link_ok=no \
 ~/toolchain-src/glibc-${GLIBC_VER}/configure \
   --prefix=/usr \
   --host=$TARGET \
@@ -240,6 +266,7 @@ mkdir -p ~/toolchain-build/glibc-headers && cd ~/toolchain-build/glibc-headers
   --with-headers=$SYSROOT/usr/include \
   --disable-multilib \
   --disable-nls \
+  --disable-werror \
   --enable-kernel=4.19 \
   libc_cv_forced_unwind=yes \
   libc_cv_c_cleanup=yes
@@ -248,13 +275,13 @@ make install-bootstrap-headers=yes install-headers DESTDIR=$SYSROOT
 make csu/subdir_lib
 install csu/crt1.o csu/crti.o csu/crtn.o $SYSROOT/usr/lib/
 
-# 占位 libc.so，供下一阶段 GCC 链接
+# Stub libc.so for GCC stage 2 link tests
 ${TARGET}-gcc -nostdlib -nostartfiles -shared -x c /dev/null \
   -o $SYSROOT/usr/lib/libc.so
 touch $SYSROOT/usr/include/gnu/stubs.h
 ```
 
-### 4.7 步骤 5 — 完整 libgcc
+### 4.7 Step 5 — Complete libgcc
 
 ```bash
 cd ~/toolchain-build/gcc-stage1
@@ -262,11 +289,13 @@ make -j$JOBS all-target-libgcc
 make install-target-libgcc
 ```
 
-### 4.8 步骤 6 — 完整 Glibc
+### 4.8 Step 6 — Full Glibc
 
 ```bash
 mkdir -p ~/toolchain-build/glibc && cd ~/toolchain-build/glibc
 
+# Same libc_cv_cxx_link_ok=no as step 4
+CC=${TARGET}-gcc libc_cv_cxx_link_ok=no \
 ~/toolchain-src/glibc-${GLIBC_VER}/configure \
   --prefix=/usr \
   --host=$TARGET \
@@ -274,6 +303,7 @@ mkdir -p ~/toolchain-build/glibc && cd ~/toolchain-build/glibc
   --with-headers=$SYSROOT/usr/include \
   --disable-multilib \
   --disable-nls \
+  --disable-werror \
   --enable-kernel=4.19 \
   --with-default-link \
   libc_cv_forced_unwind=yes \
@@ -283,7 +313,7 @@ make -j$JOBS
 make DESTDIR=$SYSROOT install
 ```
 
-### 4.9 步骤 7 — GCC 第二阶段（最终工具链）
+### 4.9 Step 7 — GCC stage 2 (final toolchain)
 
 ```bash
 mkdir -p ~/toolchain-build/gcc-stage2 && cd ~/toolchain-build/gcc-stage2
@@ -309,7 +339,7 @@ make install
 
 ---
 
-## 五、安装布局
+## 5. Install layout
 
 ```
 $PREFIX/
@@ -319,89 +349,122 @@ $PREFIX/
 │   ├── aarch64-none-linux-gnu-ld
 │   └── ...
 └── aarch64-none-linux-gnu/
-    └── sysroot/              ← 目标根文件系统
+    └── sysroot/              ← target root filesystem
         ├── lib/
         │   └── ld-linux-aarch64.so.1
         └── usr/
-            ├── include/      ← 头文件
-            └── lib/          ← libc.so、libm.so 等
+            ├── include/      ← headers
+            └── lib/          ← libc.so, libm.so, etc.
 ```
 
 ---
 
-## 六、使用方法
+## 6. Usage
 
-将工具链加入 PATH：
+Add the toolchain to `PATH`:
 
 ```bash
 export PATH=$PREFIX/bin:$PATH
 ```
 
-### 编译示例
+### Compile examples
 
 ```bash
-# 动态链接（需要目标机有对应 Glibc）
+# Dynamic link (target must have matching Glibc)
 ${TARGET}-gcc -o hello hello.c
 
-# 静态链接（可在任意 aarch64 Linux 上运行）
+# Static link (runs on any aarch64 Linux)
 ${TARGET}-gcc -static -o hello_static hello.c
 
 # C++
 ${TARGET}-g++ -o app app.cpp
 
-# 指定 sysroot（交叉编译用户空间程序时推荐）
+# Explicit sysroot (recommended for cross userland builds)
 ${TARGET}-gcc --sysroot=$SYSROOT -o prog prog.c
 ```
 
-### 检查生成文件的架构
+### Check output architecture
 
 ```bash
 file hello
 # hello: ELF 64-bit LSB executable, ARM aarch64, ...
 ```
 
+### Verify the toolchain state
+
+```bash
+./03-verify.sh
+```
+
+`03-verify.sh` now reports whether you are at:
+
+- **stage 1** (C toolchain only; no `${TARGET}-g++` yet), or
+- **full stage 2** (both C and C++ available)
+
+If it reports stage 1, run:
+
+```bash
+./02-build.sh gcc2
+./03-verify.sh
+```
+
 ---
 
-## 七、常见问题
+## 7. FAQ
 
 ### 1. `configure: error: Building GCC requires GMP 4.2+, MPFR 3.1.0+ and MPC 0.8.0+`
 
-确保 GMP/MPFR/MPC/ISL 已正确链接到 `gcc-${GCC_VER}/` 目录下。
+Ensure GMP/MPFR/MPC/ISL are symlinked under `gcc-${GCC_VER}/`.
 
-### 2. Glibc 编译失败 / sanitizer 相关错误
+### 2. Glibc build fails / sanitizer errors
 
-使用 `--disable-libsanitizer`（脚本已包含），或确保 GCC 第一阶段未启用 sanitizer。
+Use `--disable-libsanitizer` (already in the script), or ensure GCC stage 1 does not enable sanitizers.
 
-### 3. `cannot find crt1.o` 或 `cannot find -lc`
+### 3. `cannot find crt1.o` or `cannot find -lc`
 
-说明 Glibc 头文件/启动文件步骤未完成，或 `SYSROOT` 路径不一致。  
-所有 configure 中的 `--with-sysroot` 必须指向同一个 `$SYSROOT`。
+Glibc headers/startup step did not finish, or `SYSROOT` paths disagree.  
+Every `--with-sysroot` must point at the same `$SYSROOT`.
 
-### 4. 与 `aarch64-linux-gnu-gcc`（apt 包）的区别
+### 4. Difference from `aarch64-linux-gnu-gcc` (apt package)
 
-Ubuntu 的 `gcc-aarch64-linux-gnu` 是预编译包；本流程从源码构建，可自由选版本、打补丁、定制选项。
+Ubuntu’s `gcc-aarch64-linux-gnu` is prebuilt; this flow builds from source so you can pick versions, patches, and options.
 
-### 5. 不想编译 Glibc，只要 bare-metal / newlib
+### 5. `links-dso-program.o: file in wrong format` / `EM: 62`
 
-那是不同的目标（如 `aarch64-none-elf`），不需要 Glibc，流程更简单，但无法直接编译 Linux 用户态程序。
+**Symptom:** At Glibc step 6, `ld` reports `Relocations in generic ELF (EM: 62)` and the link line includes `-lstdc++` and `links-dso-program.o` (not `links-dso-program-c`).
+
+**Cause:** GCC step 3 builds C only; `${TARGET}-g++` does not exist yet. Glibc configure runs `AC_PROG_CXX`, finds the host `g++`, and its link test succeeds on the build machine. It then builds a C++ helper with host `g++` (x86_64, EM: 62) and links it with the aarch64 `ld`.
+
+**Fix:** Pass **`libc_cv_cxx_link_ok=no`** to Glibc configure (steps 4 and 6 in `02-build.sh`). That forces `CXX` to stay empty so Glibc uses the pure-C `links-dso-program-c`. **`CXX=` alone is not enough** — configure still discovers host `g++`.
+
+After changing configure options, remove the old build dir and re-run:
+
+```bash
+rm -rf build/glibc
+./02-build.sh glibc
+```
+
+### 6. Bare-metal / newlib only (no Glibc)
+
+Use a different target (e.g. `aarch64-none-elf`); no Glibc, simpler flow, but you cannot build normal Linux userland programs.
 
 ---
 
-## 八、组件版本对照
+## 8. Component versions
 
-| 组件 | 版本 | 说明 |
-|------|------|------|
-| Binutils | 2.43.1 | 2024 稳定版 |
-| GCC | 14.2.0 | 2024 稳定版 |
-| Glibc | 2.40 | 与 GCC 14 配套 |
-| Linux | 6.12.5 | 内核 API 头文件 |
+| Component | Version | Notes |
+|-----------|---------|-------|
+| Binutils | 2.43.1 | 2024 stable |
+| GCC | 14.2.0 | 2024 stable |
+| Glibc | 2.40 | Pairs with GCC 14 |
+| Linux | 6.12.5 | Kernel API headers |
 
-可在 `config.sh` 中修改版本号后重新下载、构建。
+Change versions in `config.sh`, then re-download and rebuild.
 
 ---
 
-## 九、参考
+## 9. References
 
-- [GCC Cross-Compiler 官方说明](https://gcc.gnu.org/install/building.html)
-- [Linux From Scratch — AArch64 工具链](https://www.linuxfromscratch.org/lfs/view/stable/partintro/toolchaintechnotes.html)
+- [GCC — Building a cross-compiler](https://gcc.gnu.org/install/building.html)
+- [Linux From Scratch — AArch64 toolchain](https://www.linuxfromscratch.org/lfs/view/stable/partintro/toolchaintechnotes.html)
 - [Preshing — How to Build a GCC Cross-Compiler](https://preshing.com/20141119/how-to-build-a-gcc-cross-compiler/)

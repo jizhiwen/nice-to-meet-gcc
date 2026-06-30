@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# aarch64-none-linux-gnu 交叉工具链构建配置
-# 用法: source config.sh
+# Cross-toolchain shared variables
+# Usage: source config.sh
 
 export TOP="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 安装前缀（工具链可执行文件安装位置）
+# Where to install toolchain binaries (gcc, ld, etc.)
 export PREFIX="${PREFIX:-$HOME/cross-aarch64}"
 
-# GNU 目标三元组（arm64 在 GNU 中写作 aarch64）
+# Target: arm64 Linux (GNU spelling is aarch64)
 export TARGET="${TARGET:-aarch64-none-linux-gnu}"
 
-# 构建机三元组（自动检测）
+# Build machine triplet (usually x86_64-linux-gnu)
 export BUILD="${BUILD:-$("$TOP/scripts/config.guess" 2>/dev/null || gcc -dumpmachine)}"
 export HOST="$BUILD"
 
-# 源码与构建目录
-export SRCDIR="$TOP/sources"
-export BUILDDIR="$TOP/build"
-export LOGDIR="$TOP/logs"
+# Directories
+export SRCDIR="$TOP/sources"    # extracted source trees
+export BUILDDIR="$TOP/build"    # out-of-tree build dirs
+export LOGDIR="$TOP/logs"       # build logs
 
-# 组件版本（可按需修改）
+# Versions
 export BINUTILS_VER=2.43.1
 export GCC_VER=14.2.0
 export GLIBC_VER=2.40
@@ -29,11 +29,10 @@ export MPFR_VER=4.2.1
 export MPC_VER=1.3.1
 export ISL_VER=0.27
 
-# sysroot：目标系统的根文件系统布局
+# sysroot: pretend this is the root of an aarch64 system; headers and libc go here
 export SYSROOT="$PREFIX/$TARGET/sysroot"
 
-# 并行编译线程数
 export JOBS="${JOBS:-$(nproc)}"
 
-# 将工具链加入 PATH（构建过程中需要）
+# Put cross tools on PATH as each step installs them
 export PATH="$PREFIX/bin:$PATH"
