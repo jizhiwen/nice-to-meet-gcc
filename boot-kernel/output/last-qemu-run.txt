@@ -1,0 +1,7 @@
+=== boot_kernel QEMU (tiny) ===
+Time:     2026-07-01T20:58:31+08:00
+Kernel:   /home/zw/src/data-collection/boot_kernel/output/bzImage
+Initramfs: /home/zw/src/data-collection/boot_kernel/output/initramfs-tiny.cpio.gz
+Append:   console=ttyS0 rdinit=/bin/tinysh panic=1
+Memory:   512M
+Cmd:      qemu-system-x86_64 -m 512M -kernel /home/zw/src/data-collection/boot_kernel/output/bzImage -initrd /home/zw/src/data-collection/boot_kernel/output/initramfs-tiny.cpio.gz -append "console=ttyS0 rdinit=/bin/tinysh panic=1" ...
