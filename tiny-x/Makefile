@@ -8,12 +8,12 @@
 #   4. shell  (tiny shell)
 #   5. hello  (hello world)
 #   6. kernel (with embedded initramfs)
-#   7. iso    (bootable ISO for VirtualBox)
+#   7. iso    (bootable ISO for QEMU)
 
 BUILD = $(CURDIR)/build
 SHELL_CMD = /bin/bash
 
-.PHONY: all clean iso tools libc dynlink shell hello kernel boot \
+.PHONY: all clean iso run tools libc dynlink shell hello kernel boot \
         check-deps
 
 all: check-deps tools libc dynlink shell hello kernel iso
@@ -165,12 +165,19 @@ iso: kernel
 	@echo "╔══════════════════════════════════════════════════════════╗"
 	@echo "║  tiny-x.iso created: $(BUILD)/tiny-x.iso"
 	@echo "║"
-	@echo "║  VirtualBox setup:"
-	@echo "║    1. New VM → Linux → Other Linux 64-bit"
-	@echo "║    2. RAM: 256MB minimum"
-	@echo "║    3. Storage → Add CD-ROM → $(BUILD)/tiny-x.iso"
-	@echo "║    4. Start VM"
+	@echo "║  Run with QEMU:  make run"
+	@echo "║  Or manually:    qemu-system-x86_64 -cdrom $(BUILD)/tiny-x.iso \\"
+	@echo "║                      -m 256M -nographic -no-reboot"
 	@echo "╚══════════════════════════════════════════════════════════╝"
+
+# ── Run in QEMU ───────────────────────────────────────────────────────
+run: $(BUILD)/tiny-x.iso
+	@echo "=== Booting tiny-x in QEMU ==="
+	qemu-system-x86_64 \
+	    -cdrom $(BUILD)/tiny-x.iso \
+	    -m 256M \
+	    -nographic \
+	    -no-reboot
 
 # ── Clean ─────────────────────────────────────────────────────────────
 clean:
@@ -195,5 +202,6 @@ info:
 	@echo "  hello    - Build hello world"
 	@echo "  kernel   - Build kernel"
 	@echo "  iso      - Create bootable ISO"
+	@echo "  run      - Boot ISO in QEMU"
 	@echo "  boot     - Build custom MBR+Stage2 bootloader"
 	@echo "  clean    - Remove build artifacts"
