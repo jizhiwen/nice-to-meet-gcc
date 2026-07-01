@@ -1,6 +1,13 @@
-# boot_kernel — Minimal Linux + bash via QEMU
+# boot_kernel — Minimal Linux + bash or tinysh via QEMU
 
-Build an **x86_64 Linux kernel** and a tiny **initramfs** root filesystem in RAM: **bash** (shell) + **busybox** (`mount`, `ls`, `cat`, …). All userland binaries are **built from source** — nothing copied from the host.
+Build an **x86_64 Linux kernel** and a tiny **initramfs** root filesystem in RAM. Two userland options:
+
+| Shell | libc? | Size | Use case |
+|-------|-------|------|----------|
+| **bash** (default) | yes (glibc, static-linked) | ~1 MB | full interactive shell |
+| **tinysh** | **no** | ~9 KB | minimal PID 1 + exec busybox applets |
+
+Both variants include **busybox** (`mount`, `ls`, `cat`, …). All userland binaries are **built from source** — nothing copied from the host.
 
 Layout mirrors `build-cross`:
 
@@ -10,13 +17,16 @@ boot_kernel/
 ├── 01-download.sh
 ├── 02-build.sh
 ├── 03-run.sh
-├── configs/boot.config   # kernel config fragment
-├── rootfs/init           # PID 1
-├── sources/              # linux + bash + busybox (gitignored)
-├── build/                # out-of-tree builds (gitignored)
+├── configs/boot.config          # kernel config fragment
+├── rootfs/init                  # PID 1 (bash variant)
+├── shell/crt0.S                 # _start for tinysh (-nostdlib)
+├── shell/tiny_shell.c           # tiny shell (raw syscalls)
+├── sources/                     # linux + bash + busybox (gitignored)
+├── build/                       # out-of-tree builds (gitignored)
 └── output/
     ├── bzImage
-    └── initramfs.cpio.gz
+    ├── initramfs.cpio.gz        # bash variant
+    └── initramfs-tiny.cpio.gz   # tinysh variant
 ```
 
 ---
@@ -38,6 +48,8 @@ sudo apt install -y \
 
 ## Quick start
 
+**Bash variant (default):**
+
 ```bash
 cd boot_kernel
 chmod +x *.sh
@@ -54,6 +66,20 @@ boot_kernel: Linux 6.12.5 — type 'exit' to halt
 boot_kernel#
 ```
 
+**Tinysh variant (no libc, no bash):**
+
+```bash
+./02-build.sh all-tiny
+./03-run.sh tiny
+```
+
+Prompt:
+
+```text
+boot_kernel tinysh: no libc — busybox applets via execve
+tinysh# ls /bin
+```
+
 Exit QEMU: **Ctrl-A**, then **X** (with `-nographic`).
 
 The lines printed by `./03-run.sh` disappear once the kernel boot log starts — that is normal (same terminal). Launch parameters are saved to `output/last-qemu-run.txt`.
@@ -66,12 +92,16 @@ The lines printed by `./03-run.sh` disappear once the kernel boot log starts —
 |------|------|--------|
 | `kernel` | Linux `x86_64_defconfig` + `configs/boot.config` | `output/bzImage` |
 | `bash` | GNU bash static (interactive shell) | `build/bash-install/bin/bash` |
+| `tinysh` | Minimal shell via raw syscalls, `-nostdlib` | `build/tinysh/tinysh` |
 | `busybox` | Static busybox — **`minimal`** (default) or `full` | `build/busybox/busybox` |
 | `initramfs` | `/init` + bash + busybox applets | `output/initramfs.cpio.gz` |
+| `initramfs-tiny` | tinysh + busybox (no bash) | `output/initramfs-tiny.cpio.gz` |
 
 ```bash
 ./02-build.sh list
+./02-build.sh all-tiny          # kernel + tinysh + busybox mini
 FORCE=1 ./02-build.sh initramfs
+FORCE=1 ./02-build.sh initramfs-tiny
 ./02-build.sh clean
 ```
 
@@ -97,15 +127,42 @@ There **is** a filesystem — it is the **initramfs** loaded into RAM at boot (`
 
 ## Boot flow
 
+**Bash variant:**
+
 ```text
 QEMU → bzImage → initramfs → /init (PID 1) → exec /bin/bash
 ```
 
-Kernel cmdline (default):
+Kernel cmdline: `console=ttyS0 rdinit=/init panic=1`
+
+**Tinysh variant:**
 
 ```text
-console=ttyS0 rdinit=/init init=/init panic=1
+QEMU → bzImage → initramfs → /bin/tinysh (PID 1) → exec busybox applets
 ```
+
+Kernel cmdline: `console=ttyS0 rdinit=/bin/tinysh panic=1`
+
+---
+
+## Bash vs tinysh vs libc
+
+| Component | Uses libc? | Notes |
+|-----------|------------|-------|
+| Linux kernel | no | runs in kernel mode |
+| **bash** | yes | static-linked glibc embedded in the binary |
+| **busybox** | musl/glibc internally | static-linked, but still a C library inside |
+| **tinysh** | **no** | `-nostdlib`, only raw `syscall` instructions |
+
+**Does bash use libc?** Yes. Even a "static" bash binary embeds glibc. The kernel does not use userspace libc; each userspace program brings its own (or, for tinysh, none).
+
+**tinysh** is a ~9 KB program that:
+- acts as PID 1 (mounts proc/sys/tmp/dev)
+- reads lines from the serial console
+- runs commands via `execve("/bin/<cmd>", …)` — busybox applets are symlinks under `/bin`
+- has one built-in: `exit`
+
+It is not a replacement for bash scripting — just enough to launch busybox commands without pulling in glibc.
 
 ---
 

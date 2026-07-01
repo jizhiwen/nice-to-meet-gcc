@@ -45,6 +45,10 @@ invalidate_later_stamps() {
   esac
 }
 
+step_initramfs_tiny() {
+  step_initramfs 1
+}
+
 run_step() {
   local name="$1"
   local stamp="$2"
@@ -172,26 +176,52 @@ step_busybox() {
   log "Busybox: $BUSYBOX_BUILD/busybox ($(du -h "$BUSYBOX_BUILD/busybox" | awk '{print $1}'), static, $BUSYBOX_PROFILE)"
 }
 
+step_tinysh() {
+  mkdir -p "$BUILDDIR/tinysh"
+  gcc -nostdlib -static -fno-pie -fno-builtin -fno-stack-protector \
+    -Wall -Wextra -O2 -Wl,-z,noexecstack \
+    "$TOP/shell/crt0.S" "$TOP/shell/tiny_shell.c" \
+    -o "$TINYSH"
+
+  if file "$TINYSH" | grep -q 'dynamically linked'; then
+    echo "Expected fully static tinysh (no libc)"
+    file "$TINYSH"
+    exit 1
+  fi
+  log "Tinysh: $TINYSH ($(du -h "$TINYSH" | awk '{print $1}'), no libc)"
+}
+
 step_initramfs() {
-  [[ -x "$BASH_BIN" ]] || { echo "Run: ./02-build.sh bash"; exit 1; }
+  local use_tinysh="${1:-0}"
   [[ -x "$BUSYBOX_BUILD/busybox" ]] || { echo "Run: ./02-build.sh busybox"; exit 1; }
+
+  if [[ "$use_tinysh" == "1" ]]; then
+    [[ -x "$TINYSH" ]] || { echo "Run: ./02-build.sh tinysh"; exit 1; }
+  else
+    [[ -x "$BASH_BIN" ]] || { echo "Run: ./02-build.sh bash"; exit 1; }
+  fi
 
   rm -rf "$ROOTFS"
   mkdir -p "$ROOTFS"/{bin,dev,proc,sys,tmp,root}
 
-  # busybox install creates /bin/busybox + applet symlinks (mount, ls, …)
   make -C "$BUSYBOX_SRC" O="$BUSYBOX_BUILD" CONFIG_PREFIX="$ROOTFS" install
 
-  install -D -m 755 "$BASH_BIN" "$ROOTFS/bin/bash"
-  install -D -m 755 "$TOP/rootfs/init" "$ROOTFS/init"
+  if [[ "$use_tinysh" == "1" ]]; then
+    install -D -m 755 "$TINYSH" "$ROOTFS/bin/tinysh"
+  else
+    install -D -m 755 "$BASH_BIN" "$ROOTFS/bin/bash"
+    install -D -m 755 "$TOP/rootfs/init" "$ROOTFS/init"
+  fi
 
   mkdir -p "$OUTPUT"
+  local out="$INITRAMFS"
+  [[ "$use_tinysh" == "1" ]] && out="$INITRAMFS_TINY"
   (
     cd "$ROOTFS"
     find . -print0 | cpio --null -ov --format=newc
-  ) | gzip -9 > "$INITRAMFS"
+  ) | gzip -9 > "$out"
 
-  log "Initramfs: $INITRAMFS ($(du -h "$INITRAMFS" | awk '{print $1}'))"
+  log "Initramfs: $out ($(du -h "$out" | awk '{print $1}'))"
 }
 
 usage() {
@@ -201,13 +231,16 @@ Usage: $0 [step]
 Steps:
   all              Build everything, busybox mini (default)
   all-full         Build everything, busybox full
+  all-tiny         kernel + tinysh + busybox mini + initramfs-tiny (no bash)
   deps             Check host tools
   kernel           1. bzImage
   bash             2. static bash
+  tinysh           2b. tiny shell (no libc, replaces bash)
   busybox          3. static busybox mini (default)
   busybox-mini     3. static busybox mini (key applets only)
   busybox-full     3. static busybox full (defconfig)
-  initramfs        4. pack cpio.gz
+  initramfs        4. pack cpio.gz (bash + busybox)
+  initramfs-tiny   4. pack cpio.gz (tinysh + busybox, no bash)
   list             Step status
   clean            Remove build output
 
@@ -248,9 +281,21 @@ run_all() {
   log "Done. Run: ./03-run.sh"
 }
 
+run_all_tiny() {
+  local bb_profile="${1:-mini}"
+  check_deps
+  check_kernel_source
+  check_busybox_source
+  run_step "1-kernel" "1-kernel.done" 1 step_kernel
+  run_step "2-tinysh" "2-tinysh.done" 2 step_tinysh
+  run_busybox_step "$bb_profile"
+  run_step "4-initramfs-tiny" "4-initramfs-tiny.done" 4 step_initramfs_tiny
+  log "Done. Run: ./03-run.sh tiny"
+}
+
 print_step_status() {
   mkdir -p "$STAMPDIR"
-  for step in 1-kernel 2-bash 3-busybox-mini 3-busybox-full 4-initramfs; do
+  for step in 1-kernel 2-bash 2-tinysh 3-busybox-mini 3-busybox-full 4-initramfs 4-initramfs-tiny; do
     if [[ -f "$STAMPDIR/$step.done" ]]; then
       echo "  [done] $step"
     else
@@ -275,11 +320,14 @@ main() {
     clean)          clean_build ;;
     kernel)         check_kernel_source; run_step "1-kernel" "1-kernel.done" 1 step_kernel ;;
     bash)           check_bash_source; run_step "2-bash" "2-bash.done" 2 step_bash ;;
+    tinysh)         run_step "2-tinysh" "2-tinysh.done" 2 step_tinysh ;;
     busybox|busybox-mini) run_busybox_step mini ;;
     busybox-full)   run_busybox_step full ;;
     initramfs)      run_step "4-initramfs" "4-initramfs.done" 4 step_initramfs ;;
+    initramfs-tiny) run_step "4-initramfs-tiny" "4-initramfs-tiny.done" 4 step_initramfs_tiny ;;
     all)            run_all mini ;;
     all-full)       run_all full ;;
+    all-tiny)       run_all_tiny mini ;;
     -h|--help|help) usage ;;
     *) echo "Unknown step: $step"; usage; exit 1 ;;
   esac
