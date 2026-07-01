@@ -188,7 +188,7 @@ static void resolve_path(const char *cmd, char *out, long out_len)
 	out[i] = '\0';
 }
 
-static void resolve_path(const char *cmd, char *out, long out_len)
+static void run_line(char *line)
 {
 	char *argv[MAX_ARGS];
 	char path[128];
