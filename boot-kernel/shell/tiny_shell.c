@@ -60,6 +60,18 @@ static long sys4(long n, long a, long b, long c, long d)
 	return ret;
 }
 
+static long sys5(long n, long a, long b, long c, long d, long e)
+{
+	long ret;
+	register long r10 __asm__("r10") = d;
+	register long r8 __asm__("r8") = e;
+	__asm__ volatile("syscall"
+			 : "=a"(ret)
+			 : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8)
+			 : "rcx", "r11", "memory");
+	return ret;
+}
+
 static ssize_t write_fd(int fd, const char *buf, long len)
 {
 	return (ssize_t)sys3(SYS_write, fd, (long)buf, len);
@@ -123,9 +135,34 @@ static long sys0_fork(void)
 	return sys1(SYS_fork, 0);
 }
 
-static long sys5_mount(const char *src, const char *tgt, const char *type)
+static long do_mount(const char *src, const char *tgt, const char *type)
 {
-	return sys4(SYS_mount, (long)src, (long)tgt, (long)type, 0);
+	/* mount(2): source, target, type, flags, data — all 5 args required */
+	return sys5(SYS_mount, (long)src, (long)tgt, (long)type, 0, 0);
+}
+
+static void mount_or_warn(const char *src, const char *tgt, const char *type)
+{
+	if (do_mount(src, tgt, type) < 0) {
+		print("tinysh: mount failed: ");
+		print(type);
+		print(" on ");
+		print(tgt);
+		print("\n");
+	}
+}
+
+static void setup_rootfs(void)
+{
+	sys3(SYS_mkdir, (long)"/proc", 0755, 0);
+	sys3(SYS_mkdir, (long)"/sys", 0755, 0);
+	sys3(SYS_mkdir, (long)"/tmp", 0755, 0);
+	sys3(SYS_mkdir, (long)"/dev", 0755, 0);
+
+	mount_or_warn("proc", "/proc", "proc");
+	mount_or_warn("sysfs", "/sys", "sysfs");
+	mount_or_warn("tmpfs", "/tmp", "tmpfs");
+	mount_or_warn("devtmpfs", "/dev", "devtmpfs");
 }
 
 static void resolve_path(const char *cmd, char *out, long out_len)
@@ -151,20 +188,7 @@ static void resolve_path(const char *cmd, char *out, long out_len)
 	out[i] = '\0';
 }
 
-static void setup_rootfs(void)
-{
-	sys3(SYS_mkdir, (long)"/proc", 0755, 0);
-	sys3(SYS_mkdir, (long)"/sys", 0755, 0);
-	sys3(SYS_mkdir, (long)"/tmp", 0755, 0);
-	sys3(SYS_mkdir, (long)"/dev", 0755, 0);
-
-	sys5_mount("proc", "/proc", "proc");
-	sys5_mount("sysfs", "/sys", "sysfs");
-	sys5_mount("tmpfs", "/tmp", "tmpfs");
-	sys5_mount("devtmpfs", "/dev", "devtmpfs");
-}
-
-static void run_line(char *line)
+static void resolve_path(const char *cmd, char *out, long out_len)
 {
 	char *argv[MAX_ARGS];
 	char path[128];
