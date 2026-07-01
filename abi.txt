@@ -1,0 +1,37 @@
+ELF file  = container + metadata (segments, entry point, arch, interpreter path)
+ABI       = rules inside that container (how syscalls/functions work at runtime)
+
+What must match for execve to succeed
+For a Linux x86_64 ELF binary, the kernel checks things like:
+
+Magic: ELF
+Machine: EM_X86_64 (must match the running kernel/CPU)
+Type: executable or PIE/shared object with interpreter
+Loadable segments (PT_LOAD): code, data, bss
+Entry address: where to start (e.g. _start)
+For dynamic binaries: path to interpreter, e.g. /lib64/ld-linux-x86-64.so.2
+Your a.out from gcc test.c:
+
+a.out (ELF ET_DYN/PIE)
+  → kernel loads it
+  → kernel also loads ld-linux-x86-64.so.2
+  → ld-linux loads libc.so.6
+  → then runs main()
+tinysh is also ELF, but statically linked (ET_EXEC, no interpreter).
+
+ABI examples (what ABI covers, not ELF itself)
+On x86_64 Linux ABI:
+
+Syscall: number in rax, args in rdi, rsi, rdx, r10, r8, r9
+Function calls: SysV AMD64 calling convention (rdi, rsi, rdx, rcx, r8, r9 for first integer args)
+Types/layouts: long is 8 bytes, little-endian, etc.
+That’s why an aarch64 ELF won’t run on an x86_64 kernel even though both are ELF: same format, different ABI/ISA.
+
+Short answer
+Kernel executes by path via execve
+The file must be in a known executable format (on Linux: mostly ELF)
+That format is not called ABI
+ELF = file format
+ABI = platform rules the program follows once loaded
+Kernel = separate; it only loads the file and later handles syscalls from userspace
+Your dynamic a.out is: ELF container + x86_64 Linux ABI + glibc userspace libraries. None of those .so files are the kernel itself.
