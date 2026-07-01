@@ -2,7 +2,9 @@ Implement the follow SR in tiny-sys subdirectory
 
 The follow SR only cloud be modified by me. You shoud follow.
 
-1. implement a tiny kernel
+step 1. implement a tiny kernel
   a. support x86_64 only
   b. could run by qemu-system-x86_64
   c. support a tiny shell
+
+step 2. tiny kernel implement syscall
