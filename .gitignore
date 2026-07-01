@@ -1,3 +1,10 @@
 build-cross/build
 build-cross/sources/*.tar.xz
+build-native/build
+build-native/sources/*.tar.xz
+boot_kernel/build
+boot_kernel/sources/*.tar.xz
+boot_kernel/sources/*.tar.gz
+boot_kernel/sources/*.tar.bz2
+boot_kernel/output
 tiny-sys/build
