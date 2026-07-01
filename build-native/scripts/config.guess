@@ -1,8 +1,0 @@
-#!/bin/sh
-# Minimal config.guess fallback when not yet installed
-# Real one comes from binutils/gcc after download
-if command -v gcc >/dev/null 2>&1; then
-  gcc -dumpmachine
-else
-  uname -m -s | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g'
-fi
